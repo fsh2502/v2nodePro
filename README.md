@@ -47,7 +47,7 @@ Lưu ý:
 Cài bằng script đi kèm:
 
 ```bash
-wget -N https://raw.githubusercontent.com/fsh2502/v2nodePro/master/script/install.sh && bash install.sh
+wget -N https://raw.githubusercontent.com/fsh2502/v2nodePro/main/script/install.sh && bash install.sh
 ```
 
 Cài và tạo luôn file cấu hình:
@@ -128,7 +128,7 @@ GOEXPERIMENT=jsonv2 go build -v -o build_assets/v2node -trimpath -ldflags "-X 'g
 Build đơn giản ở local:
 
 ```bash
-go build -o v2node .
+GOEXPERIMENT=jsonv2 go build -o v2node .
 ```
 
 ## Quản lý service
