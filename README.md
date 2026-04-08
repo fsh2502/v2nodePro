@@ -53,7 +53,7 @@ wget -N https://raw.githubusercontent.com/fsh2502/v2nodePro/main/script/install.
 ## Cài đặt nâng cao
 
 ```bash
-wget -N https://raw.githubusercontent.com/fsh2502/v2nodePro/refs/heads/main/script/caidatserver.sh && bash install.sh
+wget -N https://raw.githubusercontent.com/fsh2502/v2nodePro/main/script/caidatserver.sh && bash caidatserver.sh
 ```
 
 Cài và tạo luôn file cấu hình:
