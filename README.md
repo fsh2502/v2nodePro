@@ -50,6 +50,12 @@ Cài bằng script đi kèm:
 wget -N https://raw.githubusercontent.com/fsh2502/v2nodePro/main/script/install.sh && bash install.sh
 ```
 
+## Cài đặt nâng cao
+
+```bash
+wget -N https://raw.githubusercontent.com/fsh2502/v2nodePro/refs/heads/main/script/caidatserver.sh && bash install.sh
+```
+
 Cài và tạo luôn file cấu hình:
 
 ```bash
