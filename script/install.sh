@@ -227,7 +227,7 @@ generate_v2node_config() {
         cat > /etc/v2node/config.json <<EOF
 {
     "Log": {
-        "Level": "warning",
+        "Level": "none",
         "Output": "",
         "Access": "none"
     },
