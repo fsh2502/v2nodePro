@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "**/*.go"
+      - "go.mod"
+      - "go.sum"
+      - "Dockerfile"
+      - "script/**"
+      - ".github/workflows/**"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "**/*.go"
+      - "go.mod"
+      - "go.sum"
+      - "Dockerfile"
+      - "script/**"
+      - ".github/workflows/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: 0
+      GOEXPERIMENT: jsonv2
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run tests
+        run: go test ./...
+
+      - name: Run vet
+        run: go vet ./...
+
+      - name: Verify release build
+        shell: bash
+        run: |
+          mkdir -p dist
+          go build -trimpath \
+            -ldflags "-X 'github.com/fsh2502/v2nodePro/cmd.version=${GITHUB_SHA}' -s -w -buildid=" \
+            -o dist/v2node .
