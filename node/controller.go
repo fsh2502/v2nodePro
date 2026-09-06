@@ -3,27 +3,30 @@ package node
 import (
 	"errors"
 	"fmt"
+	"github.com/fsh2502/v2nodePro/common/certificate"
 
-	log "github.com/sirupsen/logrus"
 	panel "github.com/fsh2502/v2nodePro/api/v2board"
 	"github.com/fsh2502/v2nodePro/common/task"
 	"github.com/fsh2502/v2nodePro/conf"
 	"github.com/fsh2502/v2nodePro/core"
 	"github.com/fsh2502/v2nodePro/limiter"
+	log "github.com/sirupsen/logrus"
 )
 
 type Controller struct {
-	server                  *core.V2Core
-	apiClient               *panel.Client
-	tag                     string
-	limiter                 *limiter.Limiter
-	userList                []panel.UserInfo
-	aliveMap                map[int]int
-	conf                    *conf.NodeConfig
-	info                    *panel.NodeInfo
-	nodeInfoMonitorPeriodic *task.Task
-	userReportPeriodic      *task.Task
-	renewCertPeriodic       *task.Task
+	server                    *core.V2Core
+	apiClient                 *panel.Client
+	tag                       string
+	limiter                   *limiter.Limiter
+	userList                  []panel.UserInfo
+	aliveMap                  map[int]int
+	conf                      *conf.NodeConfig
+	info                      *panel.NodeInfo
+	nodeInfoMonitorPeriodic   *task.Task
+	userReportPeriodic        *task.Task
+	renewCertPeriodic         *task.Task
+	certificateReportPeriodic *task.Task
+	loadedCertificate         *certificate.Fingerprint
 }
 
 // NewController return a Node controller with default parameters.
@@ -73,6 +76,7 @@ func (c *Controller) Start(x *core.V2Core) error {
 			return fmt.Errorf("request cert error: %s", err)
 		}
 	}
+	c.captureCertificate()
 	// Add new tag
 	err = c.server.AddNode(c.tag, node)
 	if err != nil {
@@ -94,6 +98,9 @@ func (c *Controller) Start(x *core.V2Core) error {
 
 // Close implement the Close() function of the service interface
 func (c *Controller) Close() error {
+	if c.certificateReportPeriodic != nil {
+		c.certificateReportPeriodic.Close()
+	}
 	limiter.DeleteLimiter(c.tag)
 	if c.nodeInfoMonitorPeriodic != nil {
 		c.nodeInfoMonitorPeriodic.Close()

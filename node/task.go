@@ -3,13 +3,20 @@ package node
 import (
 	"time"
 
-	log "github.com/sirupsen/logrus"
 	panel "github.com/fsh2502/v2nodePro/api/v2board"
 	"github.com/fsh2502/v2nodePro/common/task"
 	vCore "github.com/fsh2502/v2nodePro/core"
+	log "github.com/sirupsen/logrus"
 )
 
 func (c *Controller) startTasks(node *panel.NodeInfo) {
+	if c.certificateReportingEnabled() {
+		c.certificateReportPeriodic = &task.Task{
+			Name: "reportCertificate", Interval: node.PushInterval,
+			Execute: c.reportCertificateTask, Reload: c.reloadTask,
+		}
+		_ = c.certificateReportPeriodic.Start(true)
+	}
 	// fetch node info task
 	c.nodeInfoMonitorPeriodic = &task.Task{
 		Name:     "nodeInfoMonitor",
@@ -47,6 +54,9 @@ func (c *Controller) startTasks(node *panel.NodeInfo) {
 }
 
 func (c *Controller) reloadTask() {
+	if c.certificateReportPeriodic != nil {
+		c.certificateReportPeriodic.Close()
+	}
 	newClient, err := panel.New(c.conf)
 	if err != nil {
 		log.Panic("Tasks reload failed")
