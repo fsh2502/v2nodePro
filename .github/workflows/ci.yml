@@ -31,6 +31,18 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install integration-test dependencies
+        run: sudo apt-get update && sudo apt-get install -y nginx openssl
+      - name: Check shell syntax and legacy WSS generator
+        run: |
+          for script in script/*.sh; do bash -n "$script"; done
+          bash script/test-wss-proxy.sh
+      - name: Test lifecycle manager and real multi-domain WSS routing
+        run: python3 -m unittest discover -s script -p 'test_*.py' -v
   go:
     runs-on: ubuntu-latest
     env:
