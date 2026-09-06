@@ -24,6 +24,16 @@ type NetworkSettingsProxyProtocol struct {
 	AcceptProxyProtocol bool `json:"acceptProxyProtocol"`
 }
 
+func shouldEnableInboundTLS(nodeInfo *panel.NodeInfo) (bool, error) {
+	if !nodeInfo.Common.TlsSettings.TLSIsTerminatedAtProxy() {
+		return true, nil
+	}
+	if nodeInfo.Common.Network != "ws" {
+		return false, errors.New("TLS termination at proxy requires websocket transport")
+	}
+	return false, nil
+}
+
 func (v *V2Core) removeInbound(tag string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -118,6 +128,13 @@ func buildInbound(nodeInfo *panel.NodeInfo, tag string) (*core.InboundHandlerCon
 	case panel.Tls:
 		if nodeInfo.Common.CertInfo == nil {
 			return nil, errors.New("the CertInfo is not vail")
+		}
+		enableInboundTLS, err := shouldEnableInboundTLS(nodeInfo)
+		if err != nil {
+			return nil, err
+		}
+		if !enableInboundTLS {
+			break
 		}
 		switch nodeInfo.Common.CertInfo.CertMode {
 		case "none", "":

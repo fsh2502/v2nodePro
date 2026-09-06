@@ -27,10 +27,11 @@ while true; do
     echo " 14.  Xóa path"
     echo " 15.  Sửa path"
     echo " 16.  Xem danh sách NAT"
+    echo " 17.  Cài nhanh WSS 443 cho một domain"
     echo
-    echo "❌ 17. Thoát"
+    echo "❌ 18. Thoát"
     echo "==============================================="
-    read -p "Chọn một tùy chọn [1-17]: " choice
+    read -p "Chọn một tùy chọn [1-18]: " choice
 
     case $choice in
         1)
@@ -617,6 +618,12 @@ EOF
             fi
             ;;
        17)
+            curl -fsSL https://raw.githubusercontent.com/fsh2502/v2nodePro/main/script/setup-wss-proxy.sh \
+                -o /tmp/v2node-setup-wss-proxy.sh
+            chmod +x /tmp/v2node-setup-wss-proxy.sh
+            bash /tmp/v2node-setup-wss-proxy.sh
+            ;;
+       18)
             echo "👋 Thoát..."
             exit 0
             ;;

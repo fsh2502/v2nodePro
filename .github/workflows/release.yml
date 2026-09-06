@@ -164,6 +164,7 @@ jobs:
             -o "package/${{ matrix.binary_name }}" .
           cp README.md package/README.md
           cp LICENSE package/LICENSE
+          cp script/setup-wss-proxy.sh package/setup-wss-proxy.sh
           curl -fsSL "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geoip.dat" -o package/geoip.dat
           curl -fsSL "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geosite.dat" -o package/geosite.dat
 

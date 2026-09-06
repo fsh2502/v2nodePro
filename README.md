@@ -56,6 +56,23 @@ wget -N https://raw.githubusercontent.com/fsh2502/v2nodePro/main/script/install.
 wget -N https://raw.githubusercontent.com/fsh2502/v2nodePro/main/script/caidatserver.sh && bash caidatserver.sh
 ```
 
+Trong menu, chọn **17** để cấu hình nhanh một domain WSS dùng cổng công khai `443`.
+Script sẽ tạo chứng chỉ tự ký 30 năm, cấu hình Nginx và in đúng các giá trị cần nhập
+trong v2Pro. Mỗi website dùng một domain, một WebSocket path và một cổng nội bộ riêng.
+
+Cũng có thể chạy thẳng, không cần nhập qua menu:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/fsh2502/v2nodePro/main/script/setup-wss-proxy.sh \
+  -o /tmp/setup-wss-proxy.sh && \
+bash /tmp/setup-wss-proxy.sh node-a.example.com /node-a 10001
+```
+
+Chạy lại lệnh với domain, path và cổng khác để thêm website thứ hai. Trong v2Pro,
+giữ cổng kết nối `443`, bật TLS, chọn WebSocket và bật **TLS tại Nginx**. v2node
+chỉ lắng nghe WS tại `127.0.0.1:<cổng nội bộ>` nhưng vẫn báo vân tay của đúng chứng
+chỉ mà Nginx đang sử dụng.
+
 Cài và tạo luôn file cấu hình:
 
 ```bash

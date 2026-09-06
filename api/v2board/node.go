@@ -79,19 +79,40 @@ type BaseConfig struct {
 }
 
 type TlsSettings struct {
-	ServerName       string `json:"server_name"`
-	Dest             string `json:"dest"`
-	ServerPort       string `json:"server_port"`
-	ShortId          string `json:"short_id"`
-	PrivateKey       string `json:"private_key"`
-	Mldsa65Seed      string `json:"mldsa65Seed"`
-	Xver             uint64 `json:"xver,string"`
-	CertMode         string `json:"cert_mode"`
-	CertFile         string `json:"cert_file"`
-	KeyFile          string `json:"key_file"`
-	Provider         string `json:"provider"`
-	DNSEnv           string `json:"dns_env"`
-	RejectUnknownSni string `json:"reject_unknown_sni"`
+	ServerName          string      `json:"server_name"`
+	Dest                string      `json:"dest"`
+	ServerPort          string      `json:"server_port"`
+	ShortId             string      `json:"short_id"`
+	PrivateKey          string      `json:"private_key"`
+	Mldsa65Seed         string      `json:"mldsa65Seed"`
+	Xver                uint64      `json:"xver,string"`
+	CertMode            string      `json:"cert_mode"`
+	CertFile            string      `json:"cert_file"`
+	KeyFile             string      `json:"key_file"`
+	Provider            string      `json:"provider"`
+	DNSEnv              string      `json:"dns_env"`
+	RejectUnknownSni    string      `json:"reject_unknown_sni"`
+	TerminateTLSAtProxy interface{} `json:"terminate_tls_at_proxy"`
+}
+
+// TLSIsTerminatedAtProxy reports whether a reverse proxy handles the public
+// TLS connection while Xray receives plaintext on its private listener.
+func (t TlsSettings) TLSIsTerminatedAtProxy() bool {
+	switch value := t.TerminateTLSAtProxy.(type) {
+	case bool:
+		return value
+	case string:
+		value = strings.TrimSpace(strings.ToLower(value))
+		return value == "1" || value == "true" || value == "yes" || value == "on"
+	case float64:
+		return value == 1
+	case int:
+		return value == 1
+	case int64:
+		return value == 1
+	default:
+		return false
+	}
 }
 
 type CertInfo struct {
