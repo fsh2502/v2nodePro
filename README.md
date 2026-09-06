@@ -73,6 +73,26 @@ giữ cổng kết nối `443`, bật TLS, chọn WebSocket và bật **TLS tạ
 chỉ lắng nghe WS tại `127.0.0.1:<cổng nội bộ>` nhưng vẫn báo vân tay của đúng chứng
 chỉ mà Nginx đang sử dụng.
 
+**Với nhiều domain:** nhập Server Name (SNI) và WebSocket Host đúng domain kết nối
+của từng node; tắt Disable SNI và `acceptProxyProtocol`. Mỗi domain dùng đúng cặp
+cert/key mà script in ra. Domain API của panel không phải domain kết nối node.
+Thiếu SNI có thể làm client nhận chứng chỉ của domain đầu tiên trên cổng 443.
+
+Script mới giữ các path đã tạo khi thêm path khác trên cùng domain, kiểm tra
+trùng cổng trong các cấu hình do script quản lý và dừng nếu Nginx báo trùng
+`server_name`. Mỗi panel/node vẫn phải được thêm vào mảng `Nodes` trong
+`/etc/v2node/config.json` (menu 11).
+
+Chẩn đoán một node (chỉ đọc cấu hình và kiểm tra kết nối):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/fsh2502/v2nodePro/main/script/diagnose-wss.sh -o /tmp/diagnose-wss.sh && \
+bash /tmp/diagnose-wss.sh node-b.example.com /node-b 10002
+```
+
+Hai bước trả `101` xác nhận WS backend và WSS qua Nginx. Lệnh chưa kiểm tra tài
+khoản VPN hay đường DNS/CDN từ thiết bị người dùng.
+
 Cài và tạo luôn file cấu hình:
 
 ```bash

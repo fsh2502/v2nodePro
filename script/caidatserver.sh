@@ -618,10 +618,14 @@ EOF
             fi
             ;;
        17)
-            curl -fsSL https://raw.githubusercontent.com/fsh2502/v2nodePro/main/script/setup-wss-proxy.sh \
-                -o /tmp/v2node-setup-wss-proxy.sh
-            chmod +x /tmp/v2node-setup-wss-proxy.sh
-            bash /tmp/v2node-setup-wss-proxy.sh
+            proxy_setup=$(mktemp) || continue
+            if curl -fsSL https://raw.githubusercontent.com/fsh2502/v2nodePro/main/script/setup-wss-proxy.sh \
+                -o "$proxy_setup"; then
+                bash "$proxy_setup"
+            else
+                echo "Không tải được script WSS; chưa thay đổi cấu hình."
+            fi
+            rm -f "$proxy_setup"
             ;;
        18)
             echo "👋 Thoát..."
