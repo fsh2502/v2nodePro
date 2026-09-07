@@ -276,7 +276,8 @@ Sau khi lưu node:
   systemctl restart v2node
   nginx -t && systemctl reload nginx
 
-Mỗi website phải có ApiHost + NodeID riêng trong /etc/v2node/config.json (menu 11).
+Mỗi website phải có ApiHost + NodeID riêng trong /etc/v2node/config.json.
+Dùng menu Node + WSS trong caidatserver.sh cho cài đặt mới; menu cũ đã được thay thế.
 Domain ở trên là domain kết nối node, không phải địa chỉ API panel.
 Nếu dùng chung domain cho nhiều panel, dùng cùng SNI/Host/cert nhưng path và cổng khác nhau.
 Trỏ DNS domain node về VPS này. Ghim chứng chỉ này yêu cầu kết nối trực tiếp tới Nginx.
