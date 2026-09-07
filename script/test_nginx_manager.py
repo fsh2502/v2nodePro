@@ -50,6 +50,7 @@ class RealNginxTests(unittest.TestCase):
         (self.root / "temp").mkdir()
         self.routes, self.servers = [], []
         self.proc = None
+        self.addCleanup(self.cleanup)
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
             self.port = sock.getsockname()[1]
@@ -70,7 +71,8 @@ class RealNginxTests(unittest.TestCase):
                                 "cert": cert.as_posix(), "key": key.as_posix(), "nginx_dir": self.root.as_posix()})
         self.write_config(self.routes)
         self.command(NGINX, "-p", self.root.as_posix() + "/", "-c", "nginx.conf", "-t")
-        self.proc = subprocess.Popen([NGINX, "-p", self.root.as_posix() + "/", "-c", "nginx.conf"],
+        self.proc = subprocess.Popen([NGINX, "-p", self.root.as_posix() + "/", "-c", "nginx.conf",
+                                      "-e", (self.root / "logs/error.log").as_posix()],
                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                      creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         for attempt in range(30):
@@ -81,7 +83,7 @@ class RealNginxTests(unittest.TestCase):
                 time.sleep(0.1)
         self.fail("Isolated Nginx did not start")
 
-    def tearDown(self):
+    def cleanup(self):
         if (self.root / "logs/nginx.pid").exists():
             self.command(NGINX, "-p", self.root.as_posix() + "/", "-c", "nginx.conf", "-s", "quit")
         if self.proc:
@@ -93,6 +95,8 @@ class RealNginxTests(unittest.TestCase):
         self.temp.cleanup()
 
     def command(self, *args):
+        if args[0] == NGINX:
+            args = (*args, "-e", (self.root / "logs/error.log").as_posix())
         p = subprocess.run([str(x) for x in args], capture_output=True, timeout=20,
                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         self.assertEqual(0, p.returncode, p.stderr.decode(errors="replace"))
@@ -105,7 +109,19 @@ class RealNginxTests(unittest.TestCase):
             text = text.replace("listen 443 ssl;", "listen 127.0.0.1:%s ssl;" % self.port)
             text = text.replace("    listen [::]:443 ssl;", "")
             rendered.append(text)
-        config = 'daemon off;\nworker_processes 1;\npid logs/nginx.pid;\nevents { worker_connections 256; }\nhttp {\n' + "\n".join(rendered) + "\n}\n"
+        config = """daemon off;
+worker_processes 1;
+pid logs/nginx.pid;
+error_log logs/error.log;
+events { worker_connections 256; }
+http {
+    access_log off;
+    client_body_temp_path temp/client;
+    proxy_temp_path temp/proxy;
+    fastcgi_temp_path temp/fastcgi;
+    uwsgi_temp_path temp/uwsgi;
+    scgi_temp_path temp/scgi;
+""" + "\n".join(rendered) + "\n}\n"
         (self.root / "nginx.conf").write_text(config, encoding="utf-8")
 
     def request(self, route, path=None, trust=None):

@@ -13,6 +13,10 @@ if [[ -f "$SCRIPT_DIR/caidatserver.sh" ]]; then
 fi
 TEMP_DIR="$(mktemp -d)"
 trap 'rm -rf -- "$TEMP_DIR"' EXIT
-curl -fsSL --retry 3 --connect-timeout 15 --max-time 120 \
-    https://raw.githubusercontent.com/fsh2502/v2nodePro/main/script/caidatserver.sh -o "$TEMP_DIR/caidatserver.sh"
+BOOTSTRAP_URL=https://raw.githubusercontent.com/fsh2502/v2nodePro/main/script/caidatserver.sh
+if command -v curl >/dev/null; then
+    curl -fsSL --retry 3 --connect-timeout 15 --max-time 120 "$BOOTSTRAP_URL" -o "$TEMP_DIR/caidatserver.sh"
+else
+    wget -q --timeout=30 --tries=3 "$BOOTSTRAP_URL" -O "$TEMP_DIR/caidatserver.sh"
+fi
 bash "$TEMP_DIR/caidatserver.sh" "${ARGS[@]}"
