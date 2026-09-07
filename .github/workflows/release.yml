@@ -165,7 +165,6 @@ jobs:
           cp README.md package/README.md
           cp LICENSE package/LICENSE
           cp script/setup-wss-proxy.sh package/setup-wss-proxy.sh
-          cp script/caidatserver.sh script/v2node-manager.py script/diagnose-wss.sh package/
           curl -fsSL "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geoip.dat" -o package/geoip.dat
           curl -fsSL "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geosite.dat" -o package/geosite.dat
 

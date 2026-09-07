@@ -16,5 +16,3 @@ output/*
 .idea/*
 new.sh
 quick_update.sh
-__pycache__/
-*.pyc

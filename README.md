@@ -56,49 +56,42 @@ wget -N https://raw.githubusercontent.com/fsh2502/v2nodePro/main/script/install.
 wget -N https://raw.githubusercontent.com/fsh2502/v2nodePro/main/script/caidatserver.sh && bash caidatserver.sh
 ```
 
-Menu mới quản lý **Node + Nginx WSS 443**, thay menu NAT Proxy cũ:
+Trong menu, chọn **17** để cấu hình nhanh một domain WSS dùng cổng công khai `443`.
+Script sẽ tạo chứng chỉ tự ký 30 năm, cấu hình Nginx và in đúng các giá trị cần nhập
+trong v2Pro. Mỗi website dùng một domain, một WebSocket path và một cổng nội bộ riêng.
 
-- **2**: cài hoàn chỉnh binary (đủ geoip/geosite), node và WSS.
-- **3/4/5**: thêm/sửa/xóa một website/node; giữ các node và tùy chọn khác.
-- **6/7**: danh sách/trạng thái và Doctor kiểm tra API, WS, WSS, SNI/chứng chỉ.
-- **8/9/10**: xem chứng chỉ, gia hạn và bật lịch tự gia hạn.
-- **11/12/13**: cập nhật binary có SHA-256, sao lưu và khôi phục.
-- **14/15/16/17**: tối ưu hàng đợi kết nối, gỡ node, nhập WSS cũ, mở TCP 443.
-
-Sau lần cài đầu, dùng `v2node-manager` để mở menu. Xem hướng dẫn đầy đủ tại
-[docs/node-manager.md](docs/node-manager.md).
+Cũng có thể chạy thẳng, không cần nhập qua menu:
 
 ```bash
-# Cài hoàn chỉnh; API key được hỏi và ẩn khi nhập.
-bash caidatserver.sh install --wss \
-  --api-host https://panel-a.example.com --node-id 1 \
-  --domain node-a.example.com --path /panel-a --backend-port 10001
-
-# Thêm website thứ hai, dùng chung VPS/cổng công khai 443.
-v2node-manager add \
-  --api-host https://panel-b.example.com --node-id 1 \
-  --domain node-b.example.com --path /panel-b --backend-port 10002
-
-v2node-manager list
-v2node-manager doctor --public
+curl -fsSL https://raw.githubusercontent.com/fsh2502/v2nodePro/main/script/setup-wss-proxy.sh \
+  -o /tmp/setup-wss-proxy.sh && \
+bash /tmp/setup-wss-proxy.sh node-a.example.com /node-a 10001
 ```
 
-Panel phải lưu đúng cấu hình mà trình cài in ra: TLS bật, **TLS tại Nginx** bật,
-WebSocket, Listen IP `127.0.0.1`, cổng dịch vụ riêng, cổng kết nối `443`, SNI/Host
-đúng domain. Chọn chứng chỉ **File** và dùng cert/key trình quản lý tạo. Trình cài
-đối chiếu qua API trước khi ghi cấu hình; API key node không có quyền sửa trang admin.
+Chạy lại lệnh với domain, path và cổng khác để thêm website thứ hai. Trong v2Pro,
+giữ cổng kết nối `443`, bật TLS, chọn WebSocket và bật **TLS tại Nginx**. v2node
+chỉ lắng nghe WS tại `127.0.0.1:<cổng nội bộ>` nhưng vẫn báo vân tay của đúng chứng
+chỉ mà Nginx đang sử dụng.
 
-Chứng chỉ tự ký mới có hạn **365 ngày**. Tự gia hạn trước 30 ngày chỉ được bật khi
-chọn menu 10 / `auto-renew`; ứng dụng ghim chứng chỉ cần cập nhật subscription khi
-cert đổi. Chứng chỉ cũ được giữ nguyên. Chứng chỉ Let's Encrypt có sẵn được hỗ trợ
-qua `--tls existing --cert-file ... --key-file ...`; công cụ ACME hiện có tiếp tục gia hạn.
+**Với nhiều domain:** nhập Server Name (SNI) và WebSocket Host đúng domain kết nối
+của từng node; tắt Disable SNI và `acceptProxyProtocol`. Mỗi domain dùng đúng cặp
+cert/key mà script in ra. Domain API của panel không phải domain kết nối node.
+Thiếu SNI có thể làm client nhận chứng chỉ của domain đầu tiên trên cổng 443.
 
-VPS đang dùng `setup-wss-proxy.sh`: chọn **16** / `migrate` để nhập các vhost đúng mẫu
-cũ sau khi chuyển chế độ cert trên panel sang File. Cổng, path, cert và thời hạn
-được giữ nguyên. Vhost có chỉnh sửa riêng sẽ được giữ để kiểm tra thủ công.
+Script mới giữ các path đã tạo khi thêm path khác trên cùng domain, kiểm tra
+trùng cổng trong các cấu hình do script quản lý và dừng nếu Nginx báo trùng
+`server_name`. Mỗi panel/node vẫn phải được thêm vào mảng `Nodes` trong
+`/etc/v2node/config.json` (menu 11).
 
-Kiểm tra `101` xác nhận đường truyền WebSocket; chưa xác minh tài khoản proxy hay
-khả năng truy cập Internet qua node. Firewall của nhà cung cấp cần cho phép TCP 443.
+Chẩn đoán một node (chỉ đọc cấu hình và kiểm tra kết nối):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/fsh2502/v2nodePro/main/script/diagnose-wss.sh -o /tmp/diagnose-wss.sh && \
+bash /tmp/diagnose-wss.sh node-b.example.com /node-b 10002
+```
+
+Hai bước trả `101` xác nhận WS backend và WSS qua Nginx. Lệnh chưa kiểm tra tài
+khoản VPN hay đường DNS/CDN từ thiết bị người dùng.
 
 Cài và tạo luôn file cấu hình:
 
@@ -152,19 +145,19 @@ Giải thích các trường:
 Xem phiên bản:
 
 ```bash
-/usr/local/v2node/v2node version
+v2node version
 ```
 
 Chạy server:
 
 ```bash
-/usr/local/v2node/v2node server -c /etc/v2node/config.json
+v2node server -c /etc/v2node/config.json
 ```
 
 Tắt chế độ theo dõi file cấu hình nếu cần:
 
 ```bash
-/usr/local/v2node/v2node server -c /etc/v2node/config.json -w=false
+v2node server -c /etc/v2node/config.json -w=false
 ```
 
 ## Build từ source
@@ -186,7 +179,7 @@ GOEXPERIMENT=jsonv2 go build -o v2node .
 Nếu bạn cài bằng script đi kèm, có thể quản lý nhanh bằng:
 
 ```bash
-v2node-manager
+v2node
 ```
 
 Hoặc thao tác trực tiếp bằng `systemd`:
