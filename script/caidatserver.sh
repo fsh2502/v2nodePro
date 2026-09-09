@@ -1,209 +1,240 @@
-CONF_FILE="/etc/nginx/sites-available/default"
-V2NODE_CONFIG="/etc/v2node/config.json"
+#!/usr/bin/env bash
 
+V2NODE_CONFIG="/etc/v2node/config.json"
+WSS_NGINX_DIR="${WSS_NGINX_DIR:-/etc/nginx/conf.d}"
+WSS_BACKUP_ROOT="${WSS_BACKUP_ROOT:-/etc/v2node/wss-backups}"
+WSS_MARKER='# Managed by v2nodePro setup-wss-proxy.sh'
+
+wss_config_domain() {
+    local file="$1" base domain configured_domain count
+    [[ -f "$file" && ! -L "$file" ]] || return 1
+    grep -Fxq "$WSS_MARKER" "$file" || return 1
+
+    base="${file##*/}"
+    [[ "$base" == v2node-wss-*.conf ]] || return 1
+    domain="${base#v2node-wss-}"
+    domain="${domain%.conf}"
+    [[ "$domain" =~ ^[A-Za-z0-9.-]+$ && "$domain" != .* && "$domain" != *. ]] || return 1
+
+    configured_domain="$(awk '
+        $1 == "server_name" {
+            if (NF != 2 || $2 !~ /;$/) { print "__INVALID__"; next }
+            value=$2
+            sub(/;$/, "", value)
+            print value
+        }
+    ' "$file")"
+    count="$(printf '%s\n' "$configured_domain" | awk 'NF { count++ } END { print count+0 }')"
+    [[ "$count" -eq 1 && "$configured_domain" == "$domain" ]] || return 1
+    printf '%s\n' "$domain"
+}
+
+wss_config_routes() {
+    awk '
+        $1 == "location" && $2 == "=" { path=$3; next }
+        path != "" && $1 == "proxy_pass" && $2 ~ /^http:\/\/127\.0\.0\.1:[0-9]+;$/ {
+            backend=$2
+            sub(/^http:\/\/127\.0\.0\.1:/, "", backend)
+            sub(/;$/, "", backend)
+            print path "\t" backend
+            path=""
+        }
+    ' "$1"
+}
+
+wss_collect_configs() {
+    local file domain
+    WSS_FILES=()
+    WSS_DOMAINS=()
+    shopt -s nullglob
+    for file in "$WSS_NGINX_DIR"/v2node-wss-*.conf; do
+        if domain="$(wss_config_domain "$file")"; then
+            WSS_FILES+=("$file")
+            WSS_DOMAINS+=("$domain")
+        fi
+    done
+    shopt -u nullglob
+}
+
+wss_print_entry() {
+    local number="$1" domain="$2" file="$3" path backend
+    printf '%s%s\n' "${number:+$number. }" "$domain"
+    while IFS=$'\t' read -r path backend; do
+        [[ -n "$path" ]] && printf '    path %s -> 127.0.0.1:%s\n' "$path" "$backend"
+    done < <(wss_config_routes "$file")
+}
+
+list_wss_configs() {
+    local index
+    wss_collect_configs
+    echo
+    echo "====== WSS 443 đã cấu hình ======"
+    if (( ${#WSS_FILES[@]} == 0 )); then
+        echo "Không có cấu hình WSS 443 do v2nodePro quản lý."
+        return 0
+    fi
+    for index in "${!WSS_FILES[@]}"; do
+        wss_print_entry "$((index + 1))" "${WSS_DOMAINS[$index]}" "${WSS_FILES[$index]}"
+    done
+}
+
+wss_test_nginx_config() {
+    nginx -t
+}
+
+wss_reload_nginx() {
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl reload nginx
+    elif command -v rc-service >/dev/null 2>&1; then
+        rc-service nginx reload
+    else
+        nginx -s reload
+    fi
+}
+
+wss_restore_after_failure() {
+    local backup_file="$1" target_file="$2"
+    if ! cp -p "$backup_file" "$target_file"; then
+        echo "Không thể khôi phục cấu hình từ $backup_file về $target_file." >&2
+        return 1
+    fi
+    if wss_test_nginx_config >/dev/null 2>&1 && wss_reload_nginx >/dev/null 2>&1; then
+        echo "Đã khôi phục cấu hình cũ và reload Nginx."
+        return 0
+    fi
+    echo "Đã chép lại cấu hình cũ nhưng kiểm tra hoặc reload Nginx khi khôi phục thất bại." >&2
+    return 1
+}
+
+delete_wss_config() {
+    local selection selection_number index selected_file selected_domain confirmed_domain confirmation backup_dir backup_file
+    wss_collect_configs
+    if (( ${#WSS_FILES[@]} == 0 )); then
+        echo "Không có cấu hình WSS 443 do v2nodePro quản lý."
+        return 0
+    fi
+
+    echo
+    echo "====== Chọn domain WSS 443 cần xóa ======"
+    for index in "${!WSS_FILES[@]}"; do
+        wss_print_entry "$((index + 1))" "${WSS_DOMAINS[$index]}" "${WSS_FILES[$index]}"
+    done
+    if ! read -r -p "Nhập số thứ tự (0 để hủy): " selection; then
+        echo
+        return 0
+    fi
+    if [[ "$selection" == 0 ]]; then
+        echo "Đã hủy xóa WSS 443."
+        return 0
+    fi
+    if [[ ! "$selection" =~ ^[0-9]+$ ]] || (( ${#selection} > 6 )); then
+        echo "Lựa chọn không hợp lệ."
+        return 1
+    fi
+    selection_number=$((10#$selection))
+    if (( selection_number < 1 || selection_number > ${#WSS_FILES[@]} )); then
+        echo "Lựa chọn không hợp lệ."
+        return 1
+    fi
+
+    index=$((selection_number - 1))
+    selected_file="${WSS_FILES[$index]}"
+    selected_domain="${WSS_DOMAINS[$index]}"
+    if ! confirmed_domain="$(wss_config_domain "$selected_file")" || [[ "$confirmed_domain" != "$selected_domain" ]]; then
+        echo "Tệp đã thay đổi, là symlink hoặc không còn do v2nodePro quản lý; từ chối xóa."
+        return 1
+    fi
+
+    echo "Sẽ xóa toàn bộ cấu hình WSS của domain $selected_domain, gồm:"
+    wss_print_entry "" "$selected_domain" "$selected_file"
+    if ! read -r -p "Nhập chính xác 'XOA $selected_domain' để xác nhận: " confirmation ||
+        [[ "$confirmation" != "XOA $selected_domain" ]]; then
+        echo "Đã hủy xóa WSS 443."
+        return 0
+    fi
+
+    if ! wss_test_nginx_config; then
+        echo "Cấu hình Nginx hiện tại không hợp lệ; chưa xóa gì."
+        return 1
+    fi
+    if ! confirmed_domain="$(wss_config_domain "$selected_file")" || [[ "$confirmed_domain" != "$selected_domain" ]]; then
+        echo "Tệp đã thay đổi, là symlink hoặc không còn do v2nodePro quản lý; từ chối xóa."
+        return 1
+    fi
+    mkdir -p "$WSS_BACKUP_ROOT" || return 1
+    backup_dir="$(mktemp -d "$WSS_BACKUP_ROOT/${selected_domain}.XXXXXX")" || return 1
+    backup_file="$backup_dir/${selected_file##*/}"
+    if ! cp -p "$selected_file" "$backup_file" || ! cmp -s "$selected_file" "$backup_file"; then
+        echo "Không thể tạo và kiểm chứng bản sao lưu; chưa xóa gì." >&2
+        return 1
+    fi
+    echo "Đã tạo bản sao lưu: $backup_file"
+    if ! confirmed_domain="$(wss_config_domain "$selected_file")" || [[ "$confirmed_domain" != "$selected_domain" ]]; then
+        echo "Tệp đã thay đổi, là symlink hoặc không còn do v2nodePro quản lý; từ chối xóa."
+        return 1
+    fi
+
+    if ! rm -f -- "$selected_file"; then
+        echo "Không thể xóa $selected_file; bản sao lưu ở $backup_file."
+        return 1
+    fi
+    if ! wss_test_nginx_config; then
+        echo "Cấu hình Nginx lỗi sau khi xóa; đang khôi phục."
+        wss_restore_after_failure "$backup_file" "$selected_file" || true
+        return 1
+    fi
+    if ! wss_reload_nginx; then
+        echo "Reload Nginx thất bại sau khi xóa; đang khôi phục."
+        wss_restore_after_failure "$backup_file" "$selected_file" || true
+        return 1
+    fi
+
+    echo "Đã xóa cấu hình WSS 443 của $selected_domain và reload Nginx."
+    echo "Bản sao lưu: $backup_file"
+}
+
+main() {
 while true; do
     clear
     echo "============== MENU CHỨC NĂNG v2.2 =============="
-    echo "📦 CÀI ĐẶT:"
-    echo "  1.  Cài đặt NAT Proxy"
-    echo "  2.  Cài đặt V2nodePro"
-    echo
-    echo "🔧 QUẢN LÝ DỊCH VỤ:"
-    echo "  3.  Khởi động lại NAT Proxy"
-    echo "  4.  Khởi động lại V2nodePro"
-    echo "  5.  Gỡ cài đặt NAT Proxy"
-    echo "  6.  Gỡ cài đặt V2nodePro"
+    echo "📦 QUẢN LÝ V2NODEPRO:"
+    echo "  1.  Cài đặt V2nodePro"
+    echo "  2.  Khởi động lại V2nodePro"
+    echo "  3.  Gỡ cài đặt V2nodePro"
     echo
     echo "⚙️ TỐI ƯU & CÔNG CỤ:"
-    echo "  7.  Tối ưu hóa VPS"
-    echo "  8.  Speedtest VPS"
-    echo "  9.  Chặn Speedtest"
-    echo " 10.  Mở Speedtest"
+    echo "  4.  Tối ưu hóa VPS"
+    echo "  5.  Speedtest VPS"
+    echo "  6.  Chặn Speedtest"
+    echo "  7.  Mở Speedtest"
     echo
-    echo "🌐 QUẢN LÝ PROXY PATH:"
-    echo " 11.  Thêm node"
-    echo " 12.  Xóa node theo ApiHost + NodeID"
-    echo " 13.  Thêm path mới"
-    echo " 14.  Xóa path"
-    echo " 15.  Sửa path"
-    echo " 16.  Xem danh sách NAT"
-    echo " 17.  Cài nhanh WSS 443 cho một domain"
+    echo "🌐 CẤU HÌNH NODE & WSS:"
+    echo "  8.  Thêm node"
+    echo "  9.  Xóa node theo ApiHost + NodeID"
+    echo " 10.  Cài nhanh WSS 443 cho một domain"
+    echo " 11.  Xem danh sách WSS 443 đã cấu hình"
+    echo " 12.  Xóa WSS 443 theo domain"
     echo
-    echo "❌ 18. Thoát"
+    echo "❌  0. Thoát"
     echo "==============================================="
-    read -p "Chọn một tùy chọn [1-18]: " choice
+    if ! read -r -p "Chọn một tùy chọn [0-12]: " choice; then
+        echo
+        exit 0
+    fi
 
     case $choice in
         1)
-            # — Nhập thông số trước khi cài đặt
-            read -p "Nhập port dịch vụ Web 1 (port 80): " ip_port_80
-            read -p "Nhập path port 80 Web 1: " path80
-
-            (
-                exec >/dev/null 2>&1
-
-                # Cài gói cần thiết
-                if [[ -f /etc/centos-release ]]; then
-                    yum install -y epel-release openssl wget curl unzip tar crontabs socat nginx
-                    firewall-cmd --zone=public --add-port=80/tcp --permanent
-                    firewall-cmd --zone=public --add-port=443/tcp --permanent
-                    firewall-cmd --reload
-                else
-                    apt update -y
-                    apt install -y openssl wget curl unzip tar cron socat nginx
-                    ufw allow 80; ufw allow 443; ufw allow 'Nginx HTTP'
-                fi
-
-                curl https://get.acme.sh | sh
-                openssl req -newkey rsa:2048 -x509 -sha256 -days 365 -nodes \
-                    -out /root/ssl.crt \
-                    -keyout /root/ssl.key \
-                    -subj "/C=JP/ST=Tokyo/L=Chiyoda-ku/O=MyOrg/CN=localhost"
-
-                cat > /etc/nginx/nginx.conf <<'EOF'
-user www-data;
-worker_processes auto;
-worker_rlimit_nofile 100000;
-error_log /var/log/nginx/error.log crit;
-pid /run/nginx.pid;
-
-events {
-    worker_connections 65535;
-    multi_accept on;
-    use epoll;
-}
-
-http {
-    sendfile on;
-    tcp_nopush on;
-    tcp_nodelay on;
-    keepalive_timeout 65;
-    types_hash_max_size 2048;
-    default_type application/octet-stream;
-    server_tokens off;
-    access_log off;
-
-    map $http_upgrade $connection_upgrade {
-        default upgrade;
-        ''      close;
-    }
-
-    ssl_protocols TLSv1.3 TLSv1.2;
-    ssl_prefer_server_ciphers on;
-    ssl_ciphers EECDH+AESGCM:EECDH+CHACHA20;
-    ssl_session_cache shared:SSL:50m;
-    ssl_session_tickets off;
-    ssl_buffer_size 4k;
-    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
-
-    open_file_cache max=200000 inactive=20s;
-    open_file_cache_valid 30s;
-    open_file_cache_min_uses 2;
-
-    gzip on;
-    gzip_min_length 1024;
-    gzip_types text/plain text/css application/json application/javascript application/xml+rss text/xml application/xml font/ttf font/otf font/eot font/woff font/woff2 image/svg+xml;
-    gzip_vary on;
-    gzip_proxied any;
-
-    client_max_body_size 100M;
-    client_body_buffer_size 16K;
-    output_buffers 2 1m;
-    postpone_output 1460;
-
-    include /etc/nginx/mime.types;
-    include /etc/nginx/conf.d/*.conf;
-    include /etc/nginx/sites-enabled/*;
-}
-EOF
-
-                cat > "$CONF_FILE" <<EOF
-server {
-    listen 80;
-    listen 443 ssl http2;
-    server_name localhost;
-
-    ssl_certificate /root/ssl.crt;
-    ssl_certificate_key /root/ssl.key;
-
-    access_log off;
-    error_log /var/log/nginx/default_error.log crit;
-
-    location /$path80 {
-        proxy_pass http://0.0.0.0:$ip_port_80;
-        proxy_http_version 1.1;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection \$connection_upgrade;
-        proxy_buffering off;
-        client_max_body_size 0;
-    }
-
-}
-EOF
-
-                systemctl restart nginx
-            ) &
-            install_pid=$!
-
-            for i in $(seq 1 100); do
-                if ! kill -0 $install_pid 2>/dev/null; then
-                    break
-                fi
-                printf "\r🔧 Đang cài đặt NAT Proxy... %3d%%" "$i"
-                sleep 0.1
-            done
-            wait $install_pid
-            printf "\r✅ Cài đặt NAT Proxy hoàn tất!            \n"
-            ;;
-        2)
             # Cài đặt V2nodePro
             wget -N https://raw.githubusercontent.com/fsh2502/v2nodePro/main/script/install.sh && bash install.sh
             ;;
-        3)
-            if systemctl restart nginx >/dev/null 2>&1; then
-                echo "✅ NAT Proxy khởi động thành công!"
+        2)
+            if systemctl restart v2node >/dev/null 2>&1; then
+                echo "✅ V2nodePro khởi động lại thành công!"
             else
-                echo "❌ NAT Proxy bị lỗi!"
+                echo "❌ V2nodePro khởi động lại thất bại!"
             fi
             ;;
-        4)
-            systemctl restart nginx >/dev/null 2>&1
-            systemctl v2node restart >/dev/null 2>&1
-            echo "✅ V2nodePro khởi động lại thành công!"
-            ;;
-        5)
-            exec 3>&1 4>&2 >/dev/null 2>&1
-            show_loading() {
-                for i in $(seq 1 100); do
-                    printf "\r🔧 Đang gỡ NAT Proxy... %3d%%" "$i"
-                    sleep 0.02
-                done
-                echo
-            }
-            remove_nginx() {
-                if [ -f /etc/debian_version ]; then
-                    systemctl stop nginx
-                    apt remove --purge -y nginx nginx-common
-                    apt autoremove -y
-                elif [ -f /etc/redhat-release ]; then
-                    systemctl stop nginx
-                    if command -v dnf &>/dev/null; then
-                        dnf remove -y nginx
-                    else
-                        yum remove -y nginx
-                    fi
-                fi
-                rm -rf /etc/nginx /var/log/nginx /var/www/html
-            }
-            show_loading & remove_nginx &
-            wait
-            exec 1>&3 2>&4
-            echo "✅ Gỡ NAT Proxy hoàn tất!"
-            ;;
-        6)
+        3)
             if command -v v2node >/dev/null 2>&1; then
                 v2node uninstall
                 rm -f /usr/bin/v2node
@@ -219,7 +250,7 @@ EOF
                 echo "⚠️ Không tìm thấy V2nodePro trên máy."
             fi
             ;;
-        7)
+        4)
             # Tối ưu hóa VPS (sysctl)
             cat > /etc/sysctl.conf <<EOF
 fs.file-max=1000000
@@ -282,11 +313,11 @@ EOF
             sysctl -p >/dev/null 2>&1
             echo "✅ Tối ưu hóa VPS hoàn tất!"
             ;;
-        8)
+        5)
             # Speedtest VPS
             curl -Lso- bench.sh | bash
             ;;
-       9)
+        6)
             # Chặn Speedtest
             for domain in \
                 www.speedtest.net speedtest.vn fast.com www.speedcheck.org speedtest.vnpt.vn \
@@ -297,7 +328,7 @@ EOF
             done
             echo "✅ Đã chặn Speedtest!"
             ;;
-       10)
+        7)
             # Mở Speedtest
             domains=(
                 "www.speedtest.net" "speedtest.vn" "fast.com" "www.speedcheck.org" "speedtest.vnpt.vn"
@@ -310,7 +341,7 @@ EOF
             done
             echo "✅ Đã mở Speedtest!"
             ;;
-       11)
+        8)
             # Thêm node
             read -p "Nhập ApiHost (ví dụ: apiwebcuaban.com): " api_host
             read -p "Nhập NodeID (ví dụ: 1): " node_id
@@ -418,7 +449,7 @@ PY
                 fi
             fi
             ;;
-       12)
+        9)
             # Xóa node theo ApiHost + NodeID
             if [[ ! -f "$V2NODE_CONFIG" ]]; then
                 echo "⚠️ Không tìm thấy $V2NODE_CONFIG"
@@ -498,126 +529,7 @@ PY
                 fi
             fi
             ;;
-       13)
-            # Thêm path mới
-            read -p "Nhập đường dẫn (ví dụ: myapp): " new_path
-            read -p "Nhập port backend (ví dụ: 8080): " new_port
-
-            proxy_block=$(cat <<EOF
-    # — Proxy thêm bởi menu
-    location /$new_path {
-        proxy_pass http://0.0.0.0:$new_port;
-        proxy_http_version 1.1;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection \$connection_upgrade;
-        proxy_buffering off;
-        client_max_body_size 0;
-    }
-
-EOF
-)
-            tmp_file=$(mktemp)
-            awk -v block="$proxy_block" '
-                BEGIN { inserted=0 }
-                {
-                    if ($0 ~ /^}/ && !inserted) {
-                        print block;
-                        inserted = 1;
-                    }
-                    print;
-                }
-            ' "$CONF_FILE" > "$tmp_file" && mv "$tmp_file" "$CONF_FILE"
-            if nginx -t >/dev/null 2>&1; then
-                systemctl reload nginx
-                echo "✅ Đã thêm proxy /$new_path → port $new_port"
-            else
-                echo "❌ Lỗi cấu hình Nginx! Khôi phục file cũ..."
-            fi
-            ;;
-       14)
-            # Xóa path
-            read -p "Nhập đường dẫn cần xóa (ví dụ: myapp): " del_path
-            if grep -q "location /$del_path" "$CONF_FILE"; then
-                sed -i "/location \/$del_path {/,/}/d" "$CONF_FILE"
-                if nginx -t >/dev/null 2>&1; then
-                    systemctl reload nginx
-                    echo "✅ Đã xóa proxy /$del_path"
-                else
-                    echo "❌ Lỗi cấu hình Nginx sau khi xóa, kiểm tra lại!"
-                fi
-            else
-                echo "⚠️ Không tìm thấy proxy /$del_path trong cấu hình."
-            fi
-            ;;
-       15)
-            # Sửa path
-            read -p "Nhập đường dẫn cũ cần sửa (ví dụ: myapp): " edit_path
-            if grep -q "location /$edit_path" "$CONF_FILE"; then
-                cp "$CONF_FILE" "$CONF_FILE.bak"
-                sed -i "/location \/$edit_path {/,/}/d" "$CONF_FILE"
-                read -p "Nhập đường dẫn mới (ví dụ: newapp): " new_path2
-                read -p "Nhập port backend mới (ví dụ: 9090): " new_port2
-                proxy_block=$(cat <<EOF
-    # — Proxy sửa bởi menu
-    location /$new_path2 {
-        proxy_pass http://0.0.0.0:$new_port2;
-        proxy_http_version 1.1;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection \$connection_upgrade;
-        proxy_buffering off;
-        client_max_body_size 0;
-    }
-
-EOF
-)
-                tmp_file=$(mktemp)
-                awk -v block="$proxy_block" '
-                    BEGIN { inserted=0 }
-                    {
-                        if ($0 ~ /^}/ && !inserted) {
-                            print block;
-                            inserted = 1;
-                        }
-                        print;
-                    }
-                ' "$CONF_FILE" > "$tmp_file" && mv "$tmp_file" "$CONF_FILE"
-                if nginx -t >/dev/null 2>&1; then
-                    systemctl reload nginx
-                    echo "✅ Đã cập nhật proxy /$edit_path → /$new_path2 port $new_port2"
-                else
-                    echo "❌ Lỗi cấu hình Nginx sau khi sửa. Khôi phục file cũ."
-                    mv "$CONF_FILE.bak" "$CONF_FILE"
-                    nginx -t && systemctl reload nginx
-                fi
-            else
-                echo "⚠️ Không tìm thấy proxy /$edit_path trong cấu hình."
-            fi
-            ;;
-       16)
-            # Xem danh sách NAT
-            echo
-            echo "====== Danh sách proxy path ======"
-            current_path=""
-            while IFS= read -r line; do
-                if [[ $line =~ ^[[:space:]]*location[[:space:]]+(/[^[:space:]]+)[[:space:]]*\{ ]]; then
-                    current_path="${BASH_REMATCH[1]}"
-                elif [[ $line =~ proxy_pass[[:space:]]+http://[^:]+:([0-9]+)\; ]]; then
-                    port="${BASH_REMATCH[1]}"
-                    echo "• $current_path → port $port"
-                    current_path=""
-                fi
-            done < "$CONF_FILE"
-            if ! grep -q "^[[:space:]]*location /" "$CONF_FILE"; then
-                echo "⚠️  Không tìm thấy proxy nào trong $CONF_FILE."
-            fi
-            ;;
-       17)
+        10)
             proxy_setup=$(mktemp) || continue
             if curl -fsSL https://raw.githubusercontent.com/fsh2502/v2nodePro/main/script/setup-wss-proxy.sh \
                 -o "$proxy_setup"; then
@@ -627,7 +539,13 @@ EOF
             fi
             rm -f "$proxy_setup"
             ;;
-       18)
+        11)
+            list_wss_configs
+            ;;
+        12)
+            delete_wss_config
+            ;;
+        0)
             echo "👋 Thoát..."
             exit 0
             ;;
@@ -636,5 +554,13 @@ EOF
             ;;
     esac
 
-    read -p $'\nNhấn Enter để quay lại menu...' temp
+    if ! read -r -p $'\nNhấn Enter để quay lại menu...' temp; then
+        echo
+        exit 0
+    fi
 done
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi
