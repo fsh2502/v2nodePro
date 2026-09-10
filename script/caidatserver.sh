@@ -58,7 +58,7 @@ wss_validate_routes() {
                 backend=$2
                 sub(/^http:\/\/127\.0\.0\.1:/, "", backend)
                 sub(/;$/, "", backend)
-                if (backend < 1 || backend > 65535) invalid()
+                if (backend + 0 < 1 || backend + 0 > 65535) invalid()
                 proxy_count++
             }
             next

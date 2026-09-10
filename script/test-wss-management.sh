@@ -58,6 +58,27 @@ reset_calls() {
     export TEST_NGINX_FAIL_AT TEST_RELOAD_FAIL_AT
 }
 
+# Route validation treats extracted backend ports numerically, including Git Bash awk.
+make_config ports.example.com /xb1 6262
+make_config ports.example.com /xz1 6666
+make_config ports.example.com /shopa 10001
+expected_routes=$'/xb1\t6262\n/xz1\t6666\n/shopa\t10001'
+[[ "$(wss_validate_routes "$WSS_NGINX_DIR/v2node-wss-ports.example.com.conf")" == "$expected_routes" ]]
+
+make_config bounds.example.com /low 80
+make_config bounds.example.com /minimum 1
+make_config bounds.example.com /high 65535
+expected_routes=$'/low\t80\n/minimum\t1\n/high\t65535'
+[[ "$(wss_validate_routes "$WSS_NGINX_DIR/v2node-wss-bounds.example.com.conf")" == "$expected_routes" ]]
+for invalid_port in 0 65536; do
+    cp "$WSS_NGINX_DIR/v2node-wss-ports.example.com.conf" "$TEST_ROOT/invalid-port-$invalid_port.conf"
+    sed -i "s#127.0.0.1:6262;#127.0.0.1:$invalid_port;#" "$TEST_ROOT/invalid-port-$invalid_port.conf"
+    if wss_validate_routes "$TEST_ROOT/invalid-port-$invalid_port.conf" >/dev/null; then
+        exit 1
+    fi
+done
+rm -f "$WSS_NGINX_DIR/v2node-wss-ports.example.com.conf" "$WSS_NGINX_DIR/v2node-wss-bounds.example.com.conf"
+
 make_config a.example.com /ab 10002
 make_config a.example.com /a 10001
 make_config b.example.com /b 10003
