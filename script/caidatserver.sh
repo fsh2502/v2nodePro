@@ -42,6 +42,70 @@ wss_config_routes() {
     ' "$1"
 }
 
+wss_validate_routes() {
+    awk '
+        function invalid() { bad=1; exit }
+        state == "route" {
+            if ($0 ~ /^    }[[:space:]]*$/) {
+                if (proxy_count != 1) invalid()
+                print route_path "\t" backend
+                state=""
+                next
+            }
+            if ($0 ~ /[{}]/) invalid()
+            if ($1 == "proxy_pass") {
+                if (NF != 2 || $2 !~ /^http:\/\/127\.0\.0\.1:[0-9]+;$/) invalid()
+                backend=$2
+                sub(/^http:\/\/127\.0\.0\.1:/, "", backend)
+                sub(/;$/, "", backend)
+                if (backend < 1 || backend > 65535) invalid()
+                proxy_count++
+            }
+            next
+        }
+        state == "fallback" {
+            if ($0 ~ /^    }[[:space:]]*$/) { state=""; next }
+            if ($0 ~ /[{}]/) invalid()
+            next
+        }
+        /^    location = [^[:space:]]+ \{[[:space:]]*$/ {
+            if (NF != 4 || $3 !~ /^\/[A-Za-z0-9._~\/-]+$/ || $3 == "/" || seen[$3]++) invalid()
+            route_path=$3
+            proxy_count=0
+            backend=""
+            state="route"
+            next
+        }
+        /^    location \/ \{[[:space:]]*$/ {
+            fallback_count++
+            if (fallback_count != 1) invalid()
+            state="fallback"
+            next
+        }
+        $1 == "location" || $1 == "proxy_pass" { invalid() }
+        END {
+            if (bad || state != "" || fallback_count != 1) exit 1
+        }
+    ' "$1"
+}
+
+wss_render_without_route() {
+    local file="$1" target_path="$2"
+    awk -v target="$target_path" '
+        !skip && $1 == "location" && $2 == "=" && $3 == target && $4 == "{" {
+            skip=1
+            removed++
+            next
+        }
+        skip {
+            if ($0 ~ /^    }[[:space:]]*$/) skip=0
+            next
+        }
+        { print }
+        END { if (skip || removed != 1) exit 1 }
+    ' "$file"
+}
+
 wss_collect_configs() {
     local file domain
     WSS_FILES=()
@@ -108,6 +172,8 @@ wss_restore_after_failure() {
 
 delete_wss_config() {
     local selection selection_number index selected_file selected_domain confirmed_domain confirmation backup_dir backup_file
+    local routes_output action action_number selected_path selected_backend current_routes temp_file remaining_count
+    local -a routes
     wss_collect_configs
     if (( ${#WSS_FILES[@]} == 0 )); then
         echo "Không có cấu hình WSS 443 do v2nodePro quản lý."
@@ -145,12 +211,57 @@ delete_wss_config() {
         return 1
     fi
 
-    echo "Sẽ xóa toàn bộ cấu hình WSS của domain $selected_domain, gồm:"
-    wss_print_entry "" "$selected_domain" "$selected_file"
-    if ! read -r -p "Nhập chính xác 'XOA $selected_domain' để xác nhận: " confirmation ||
-        [[ "$confirmation" != "XOA $selected_domain" ]]; then
+    if ! routes_output="$(wss_validate_routes "$selected_file")"; then
+        echo "Cấu hình WSS không còn đúng mẫu an toàn của v2nodePro; từ chối xóa."
+        return 1
+    fi
+    mapfile -t routes <<< "$routes_output"
+    if [[ -z "$routes_output" ]]; then
+        routes=()
+    fi
+
+    echo
+    echo "====== Chọn path WSS cần xóa trên $selected_domain ======"
+    for index in "${!routes[@]}"; do
+        IFS=$'\t' read -r selected_path selected_backend <<< "${routes[$index]}"
+        printf '%s. path %s -> 127.0.0.1:%s\n' "$((index + 1))" "$selected_path" "$selected_backend"
+    done
+    echo "A. Xóa toàn bộ cấu hình của domain $selected_domain"
+    if ! read -r -p "Nhập số path, A để xóa toàn domain, hoặc 0 để hủy: " action; then
+        echo
+        return 0
+    fi
+    if [[ "$action" == 0 ]]; then
         echo "Đã hủy xóa WSS 443."
         return 0
+    fi
+    if [[ "$action" =~ ^[Aa]$ ]]; then
+        action="all"
+        echo "Sẽ xóa toàn bộ cấu hình WSS của domain $selected_domain, gồm:"
+        wss_print_entry "" "$selected_domain" "$selected_file"
+        if ! read -r -p "Nhập chính xác 'XOA $selected_domain' để xác nhận: " confirmation ||
+            [[ "$confirmation" != "XOA $selected_domain" ]]; then
+            echo "Đã hủy xóa WSS 443."
+            return 0
+        fi
+    else
+        if [[ ! "$action" =~ ^[0-9]+$ ]] || (( ${#action} > 6 )); then
+            echo "Lựa chọn path không hợp lệ."
+            return 1
+        fi
+        action_number=$((10#$action))
+        if (( action_number < 1 || action_number > ${#routes[@]} )); then
+            echo "Lựa chọn path không hợp lệ."
+            return 1
+        fi
+        action="path"
+        IFS=$'\t' read -r selected_path selected_backend <<< "${routes[$((action_number - 1))]}"
+        echo "Sẽ xóa đúng path $selected_path -> 127.0.0.1:$selected_backend trên $selected_domain."
+        if ! read -r -p "Nhập chính xác 'XOA $selected_path' để xác nhận: " confirmation ||
+            [[ "$confirmation" != "XOA $selected_path" ]]; then
+            echo "Đã hủy xóa WSS 443."
+            return 0
+        fi
     fi
 
     if ! wss_test_nginx_config; then
@@ -161,6 +272,10 @@ delete_wss_config() {
         echo "Tệp đã thay đổi, là symlink hoặc không còn do v2nodePro quản lý; từ chối xóa."
         return 1
     fi
+    if ! current_routes="$(wss_validate_routes "$selected_file")" || [[ "$current_routes" != "$routes_output" ]]; then
+        echo "Danh sách path đã thay đổi hoặc cấu hình không còn đúng mẫu an toàn; từ chối xóa."
+        return 1
+    fi
     mkdir -p "$WSS_BACKUP_ROOT" || return 1
     backup_dir="$(mktemp -d "$WSS_BACKUP_ROOT/${selected_domain}.XXXXXX")" || return 1
     backup_file="$backup_dir/${selected_file##*/}"
@@ -169,14 +284,43 @@ delete_wss_config() {
         return 1
     fi
     echo "Đã tạo bản sao lưu: $backup_file"
-    if ! confirmed_domain="$(wss_config_domain "$selected_file")" || [[ "$confirmed_domain" != "$selected_domain" ]]; then
+    if ! confirmed_domain="$(wss_config_domain "$selected_file")" || [[ "$confirmed_domain" != "$selected_domain" ]] ||
+        ! cmp -s "$selected_file" "$backup_file"; then
         echo "Tệp đã thay đổi, là symlink hoặc không còn do v2nodePro quản lý; từ chối xóa."
         return 1
     fi
 
-    if ! rm -f -- "$selected_file"; then
-        echo "Không thể xóa $selected_file; bản sao lưu ở $backup_file."
-        return 1
+    if [[ "$action" == "all" ]]; then
+        if ! rm -f -- "$selected_file"; then
+            echo "Không thể xóa $selected_file; bản sao lưu ở $backup_file."
+            return 1
+        fi
+    else
+        temp_file="$(mktemp "$WSS_NGINX_DIR/.${selected_file##*/}.XXXXXX")" || return 1
+        if ! cp -p "$selected_file" "$temp_file" ||
+            ! wss_render_without_route "$selected_file" "$selected_path" > "$temp_file" ||
+            ! current_routes="$(wss_validate_routes "$temp_file")"; then
+            rm -f -- "$temp_file"
+            echo "Không thể tạo cấu hình mới an toàn; chưa thay đổi tệp gốc." >&2
+            return 1
+        fi
+        remaining_count="$(printf '%s\n' "$current_routes" | awk 'NF { count++ } END { print count+0 }')"
+        if grep -Fqx "$selected_path"$'\t'"$selected_backend" <<< "$current_routes" ||
+            (( remaining_count != ${#routes[@]} - 1 )); then
+            rm -f -- "$temp_file"
+            echo "Kết quả xóa path không duy nhất; chưa thay đổi tệp gốc." >&2
+            return 1
+        fi
+        if [[ -L "$selected_file" ]] || ! cmp -s "$selected_file" "$backup_file"; then
+            rm -f -- "$temp_file"
+            echo "Tệp đã thay đổi trước khi thay thế; từ chối xóa." >&2
+            return 1
+        fi
+        if ! mv -f -- "$temp_file" "$selected_file"; then
+            rm -f -- "$temp_file"
+            echo "Không thể thay cấu hình; bản sao lưu ở $backup_file." >&2
+            return 1
+        fi
     fi
     if ! wss_test_nginx_config; then
         echo "Cấu hình Nginx lỗi sau khi xóa; đang khôi phục."
@@ -189,7 +333,14 @@ delete_wss_config() {
         return 1
     fi
 
-    echo "Đã xóa cấu hình WSS 443 của $selected_domain và reload Nginx."
+    if [[ "$action" == "all" ]]; then
+        echo "Đã xóa toàn bộ cấu hình WSS 443 của $selected_domain và reload Nginx."
+    elif (( remaining_count == 0 )); then
+        echo "Đã xóa path $selected_path và reload Nginx. File domain vẫn giữ TLS cùng fallback 404 để có thể thêm path mới."
+    else
+        echo "Đã xóa path $selected_path trên $selected_domain và reload Nginx; các path khác vẫn được giữ nguyên."
+    fi
+    echo "Các tệp chứng chỉ của $selected_domain vẫn được giữ nguyên."
     echo "Bản sao lưu: $backup_file"
 }
 
@@ -213,7 +364,7 @@ while true; do
     echo "  9.  Xóa node theo ApiHost + NodeID"
     echo " 10.  Cài nhanh WSS 443 cho một domain"
     echo " 11.  Xem danh sách WSS 443 đã cấu hình"
-    echo " 12.  Xóa WSS 443 theo domain"
+    echo " 12.  Xóa WSS 443 theo domain hoặc path"
     echo
     echo "❌  0. Thoát"
     echo "==============================================="
